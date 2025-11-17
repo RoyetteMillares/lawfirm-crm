@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation"
 import { auth } from "@/lib/auth"
-
+import { AdminSignOutButton } from "@/components/admin/sign-out-button"
 export default async function AdminLayout({
   children,
 }: {
@@ -10,7 +10,10 @@ export default async function AdminLayout({
 
   // Only ADMIN role can access
   if (!session?.user || session.user.role !== "ADMIN") {
-    redirect("/dashboard")
+    // If not ADMIN, redirect to correct home for their role
+    if (session?.user?.role === "LAWFIRMOWNER" || session?.user?.role === "LAWFIRMSTAFF") redirect("/portal")
+    if (session?.user?.role === "ENDUSER") redirect("/dashboard")
+    redirect("/auth/signin")
   }
 
   return (
@@ -30,6 +33,9 @@ export default async function AdminLayout({
               Law Firms
             </a>
           </nav>
+        </div>
+        <div className="px-6 pb-6">
+          <AdminSignOutButton />
         </div>
       </aside>
 

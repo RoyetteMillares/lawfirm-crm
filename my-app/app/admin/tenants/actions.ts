@@ -2,10 +2,29 @@
 
 import { prisma } from "@/lib/prisma"
 import { auth } from "@/lib/auth"
+import { headers } from "next/headers"
 import { revalidatePath } from "next/cache"
 import { z } from "zod"
 import { createAuditLog } from "@/lib/audit"
 import { TenantStatus } from "@prisma/client"
+
+// roy: Helper function to extract IP and User-Agent from request headers
+async function getRequestMetadata() {
+  const headersList = await headers()
+  
+  // roy: Extract IP address (handles proxies, load balancers, and CDNs)
+  const ipAddress = 
+    headersList.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    headersList.get("x-real-ip") ||
+    headersList.get("cf-connecting-ip") || // Cloudflare
+    headersList.get("true-client-ip") ||   // Cloudflare Enterprise
+    "unknown"
+  
+  // roy: Extract User-Agent
+  const userAgent = headersList.get("user-agent") || "unknown"
+  
+  return { ipAddress, userAgent }
+}
 
 // roy: Validation schema for creating tenants
 const createTenantSchema = z.object({
@@ -86,7 +105,7 @@ export async function getTenants({
         contactEmail: true,
         contactPhone: true,
         website: true,
-        address: true,   
+        address: true,
         createdAt: true,
         updatedAt: true,
         _count: {
@@ -154,7 +173,10 @@ export async function createTenant(data: z.infer<typeof createTenantSchema>) {
     },
   })
 
-  // roy: Create audit log
+  // roy: Get request metadata (IP + User-Agent)
+  const { ipAddress, userAgent } = await getRequestMetadata()
+
+  // roy: Create audit log with IP and User-Agent
   await createAuditLog({
     userId: session.user.id,
     tenantId: newTenant.id,
@@ -166,9 +188,11 @@ export async function createTenant(data: z.infer<typeof createTenantSchema>) {
       slug: newTenant.slug,
       status: newTenant.status,
     },
+    ipAddress,
+    userAgent,
   })
 
-  console.log(`roy: Tenant created - ${newTenant.name} by admin ${session.user.email}`)
+  console.log(`roy: Tenant created - ${newTenant.name} by admin ${session.user.email} from ${ipAddress}`)
 
   revalidatePath("/admin/tenants")
 
@@ -214,7 +238,10 @@ export async function updateTenant(data: z.infer<typeof updateTenantSchema>) {
     },
   })
 
-  // roy: Create audit log
+  // roy: Get request metadata (IP + User-Agent)
+  const { ipAddress, userAgent } = await getRequestMetadata()
+
+  // roy: Create audit log with IP and User-Agent
   await createAuditLog({
     userId: session.user.id,
     tenantId: updatedTenant.id,
@@ -222,9 +249,11 @@ export async function updateTenant(data: z.infer<typeof updateTenantSchema>) {
     resource: "Tenant",
     resourceId: updatedTenant.id,
     metadata: updateData,
+    ipAddress,
+    userAgent,
   })
 
-  console.log(`roy: Tenant updated - ${updatedTenant.name} by admin ${session.user.email}`)
+  console.log(`roy: Tenant updated - ${updatedTenant.name} by admin ${session.user.email} from ${ipAddress}`)
 
   revalidatePath("/admin/tenants")
 
@@ -263,7 +292,10 @@ export async function deleteTenant(tenantId: string) {
     where: { id: tenantId },
   })
 
-  // roy: Create audit log
+  // roy: Get request metadata (IP + User-Agent)
+  const { ipAddress, userAgent } = await getRequestMetadata()
+
+  // roy: Create audit log with IP and User-Agent
   await createAuditLog({
     userId: session.user.id,
     action: "DELETED",
@@ -273,9 +305,11 @@ export async function deleteTenant(tenantId: string) {
       name: tenant.name,
       slug: tenant.slug,
     },
+    ipAddress,
+    userAgent,
   })
 
-  console.log(`roy: Tenant deleted - ${tenant.name} by admin ${session.user.email}`)
+  console.log(`roy: Tenant deleted - ${tenant.name} by admin ${session.user.email} from ${ipAddress}`)
 
   revalidatePath("/admin/tenants")
 

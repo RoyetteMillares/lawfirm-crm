@@ -1,5 +1,7 @@
 import { redirect } from "next/navigation"
 import { auth } from "@/lib/auth"
+import { PortalSidebar } from "@/components/portal/portal-sidebar"
+import { PortalHeader } from "@/components/portal/portal-header"
 
 export default async function PortalLayout({
   children,
@@ -8,34 +10,27 @@ export default async function PortalLayout({
 }) {
   const session = await auth()
 
-  if (!session?.user) {
+  if (!session?.user || (session.user.role !== "LAWFIRMOWNER" && session.user.role !== "LAWFIRMSTAFF")) {
+    if (session?.user?.role === "ADMIN") redirect("/admin")
+    if (session?.user?.role === "ENDUSER") redirect("/dashboard")
     redirect("/auth/signin")
   }
 
-  // Only ENDUSER can access portal
-  if (session.user.role !== "ENDUSER") {
-    redirect("/dashboard")
+  // roy: After ADMIN check, TypeScript knows role is one of the other three
+  // roy: Law firm users must have a tenant
+  if (!session.user.tenantId) {
+    redirect("/auth/signin?error=NoTenant")
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white border-b">
-        <div className="container mx-auto px-4 py-4 flex justify-between items-center">
-          <h1 className="text-xl font-bold">Legal Fusion Portal</h1>
-          <div className="flex items-center gap-4">
-            <span>{session.user.name}</span>
-            <a href="/api/auth/signout" className="text-sm text-gray-600 hover:text-gray-900">
-              Sign Out
-            </a>
-          </div>
-        </div>
-      </header>
-
-      {/* Main content */}
-      <main className="container mx-auto px-4 py-8">
-        {children}
-      </main>
+    <div className="flex h-screen bg-gray-50">
+      <PortalSidebar user={session.user} />
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <PortalHeader user={session.user} />
+        <main className="flex-1 overflow-y-auto p-6">
+          {children}
+        </main>
+      </div>
     </div>
   )
 }
