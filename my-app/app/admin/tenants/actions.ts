@@ -7,6 +7,7 @@ import { revalidatePath } from "next/cache"
 import { z } from "zod"
 import { createAuditLog } from "@/lib/audit"
 import { TenantStatus } from "@prisma/client"
+import { TENANT_PLAN_OPTIONS, type TenantPlan } from "./plan-options"
 
 // roy: Helper function to extract IP and User-Agent from request headers
 async function getRequestMetadata() {
@@ -27,6 +28,8 @@ async function getRequestMetadata() {
 }
 
 // roy: Validation schema for creating tenants
+const planEnum = z.enum(TENANT_PLAN_OPTIONS)
+
 const createTenantSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters"),
   slug: z
@@ -34,7 +37,7 @@ const createTenantSchema = z.object({
     .min(2, "Slug must be at least 2 characters")
     .regex(/^[a-z0-9-]+$/, "Slug can only contain lowercase letters, numbers, and hyphens"),
   status: z.enum(["TRIAL", "ACTIVE", "SUSPENDED", "CANCELED"]),
-  plan: z.string().default("trial"),
+  plan: planEnum,
   contactEmail: z.string().email().optional().or(z.literal("")),
   contactPhone: z.string().optional(),
   website: z.string().url().optional().or(z.literal("")),
@@ -51,7 +54,7 @@ const updateTenantSchema = z.object({
     .regex(/^[a-z0-9-]+$/, "Slug can only contain lowercase letters, numbers, and hyphens")
     .optional(),
   status: z.enum(["TRIAL", "ACTIVE", "SUSPENDED", "CANCELED"]).optional(),
-  plan: z.string().optional(),
+  plan: planEnum.optional(),
   contactEmail: z.string().email().optional().or(z.literal("")),
   contactPhone: z.string().optional(),
   website: z.string().url().optional().or(z.literal("")),

@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation"
 import { auth } from "@/lib/auth"
+import { getRoleHomeRoute } from "@/proxy"
 
 export default async function DashboardLayout({
   children,
@@ -12,14 +13,8 @@ export default async function DashboardLayout({
     redirect("/auth/signin")
   }
 
-  // Redirect admin to admin panel
-  if (session.user.role === "ADMIN") {
-    redirect("/admin")
-  }
-
-  // Redirect end users to portal
-  if (session.user.role === "ENDUSER") {
-    redirect("/portal")
+  if (session.user.role !== "ENDUSER") {
+    redirect(getRoleHomeRoute(session.user.role))
   }
 
   return (

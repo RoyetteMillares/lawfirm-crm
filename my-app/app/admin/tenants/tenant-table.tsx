@@ -32,13 +32,14 @@ import { MoreHorizontal } from "lucide-react"
 import { EditTenantDialog } from "@/app/admin/tenants/edit-tenant-dialog"
 import { deleteTenant } from "@/app/admin/tenants/actions"
 import { toast } from "sonner"
+import { TENANT_PLAN_LABELS, type TenantPlan } from "@/app/admin/tenants/plan-options"
 
 interface Tenant {
   id: string
   name: string
   slug: string
   status: string
-  plan: string
+  plan: TenantPlan
   contactEmail: string | null
   contactPhone: string | null
   website: string | null
@@ -188,7 +189,7 @@ export function TenantTable({ tenants, pagination }: TenantTableProps) {
                       {tenant.status}
                     </Badge>
                   </TableCell>
-                  <TableCell>{tenant.plan}</TableCell>
+                  <TableCell>{TENANT_PLAN_LABELS[tenant.plan] ?? tenant.plan}</TableCell>
                   <TableCell>{tenant._count.users}</TableCell>
                   <TableCell>
                     {tenant.contactEmail ? (

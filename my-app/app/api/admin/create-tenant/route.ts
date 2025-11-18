@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { auth } from "@/lib/auth"
+import { TENANT_PLAN_OPTIONS, type TenantPlan } from "@/app/admin/tenants/plan-options"
 
 export async function POST(req: NextRequest) {
   try {
@@ -43,6 +44,18 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    const normalizePlan = (value: unknown): TenantPlan => {
+      if (typeof value === "string") {
+        const lower = value.toLowerCase() as TenantPlan
+        if ((TENANT_PLAN_OPTIONS as readonly string[]).includes(lower)) {
+          return lower
+        }
+      }
+      return "trial"
+    }
+
+    const safePlan = normalizePlan(plan)
+
     // Create tenant
     const tenant = await prisma.tenant.create({
       data: {
@@ -51,7 +64,7 @@ export async function POST(req: NextRequest) {
         contactEmail,
         contactPhone,
         website,
-        plan: plan || "trial",
+        plan: safePlan,
         status: "TRIAL"
       }
     })

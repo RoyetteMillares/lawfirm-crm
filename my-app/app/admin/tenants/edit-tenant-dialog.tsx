@@ -23,6 +23,9 @@ import {
 } from "@/components/ui/select"
 import { updateTenant } from "./actions"
 import { toast } from "sonner"
+import { TENANT_PLAN_OPTIONS, TENANT_PLAN_LABELS, type TenantPlan } from "@/app/admin/tenants/plan-options"
+
+const planEnum = z.enum(TENANT_PLAN_OPTIONS)
 
 const updateTenantSchema = z.object({
     id: z.string(),
@@ -33,7 +36,7 @@ const updateTenantSchema = z.object({
         .regex(/^[a-z0-9-]+$/, "Slug can only contain lowercase letters, numbers, and hyphens")
         .optional(),
     status: z.enum(["TRIAL", "ACTIVE", "SUSPENDED", "CANCELED"]).optional(),
-    plan: z.string().optional(),
+    plan: planEnum.optional(),
     contactEmail: z.string().email().optional().or(z.literal("")),
     contactPhone: z.string().optional(),
     website: z.string().url().optional().or(z.literal("")),
@@ -47,7 +50,7 @@ interface Tenant {
     name: string
     slug: string
     status: string
-    plan: string
+    plan: TenantPlan
     contactEmail: string | null
     contactPhone: string | null
     website: string | null
@@ -75,6 +78,7 @@ export function EditTenantDialog({ tenant, open, onOpenChange }: EditTenantDialo
     })
 
     const statusValue = watch("status")
+    const planValue = watch("plan") as TenantPlan | undefined
 
     useEffect(() => {
         if (tenant) {
@@ -157,7 +161,22 @@ export function EditTenantDialog({ tenant, open, onOpenChange }: EditTenantDialo
 
                     <div>
                         <Label htmlFor="plan">Plan</Label>
-                        <Input id="plan" {...register("plan")} />
+                        <Select
+                            value={(planValue || tenant.plan) as TenantPlan}
+                            onValueChange={(value) => setValue("plan", value as TenantPlan)}
+                            disabled={isLoading}
+                        >
+                            <SelectTrigger id="plan">
+                                <SelectValue placeholder="Select a plan" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {TENANT_PLAN_OPTIONS.map((option) => (
+                                    <SelectItem key={option} value={option}>
+                                        {TENANT_PLAN_LABELS[option]}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
                         {errors.plan && (
                             <p className="text-sm text-destructive mt-1">{errors.plan.message}</p>
                         )}

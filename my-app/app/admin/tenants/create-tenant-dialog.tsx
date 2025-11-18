@@ -20,6 +20,9 @@ import { Plus } from "lucide-react"
 import { createTenant } from "./actions"
 import { toast } from "sonner"
 import type { SubmitHandler } from "react-hook-form"
+import { TENANT_PLAN_OPTIONS, TENANT_PLAN_LABELS, type TenantPlan } from "@/app/admin/tenants/plan-options"
+
+const planEnum = z.enum(TENANT_PLAN_OPTIONS)
 
 const createTenantSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters"),
@@ -28,7 +31,7 @@ const createTenantSchema = z.object({
     .min(2, "Slug must be at least 2 characters")
     .regex(/^[a-z0-9-]+$/, "Slug can only contain lowercase letters, numbers, and hyphens"),
   status: z.enum(["TRIAL", "ACTIVE", "SUSPENDED", "CANCELED"]),
-  plan: z.string().optional().default("trial"), // roy: This sets default value in schema, but doesn't apply in useForm defaultValues
+  plan: planEnum,
   contactEmail: z.string().email().optional().or(z.literal("")),
   contactPhone: z.string().optional(),
   website: z.string().url().optional().or(z.literal("")),
@@ -61,6 +64,7 @@ export function CreateTenantDialog() {
   })
 
   const statusValue = watch("status")
+  const planValue = (watch("plan") as TenantPlan) || "trial"
 
   const onSubmit: SubmitHandler<CreateTenantForm> = async (data) => {
     setIsLoading(true)
@@ -134,7 +138,22 @@ export function CreateTenantDialog() {
 
           <div>
             <Label htmlFor="plan">Plan</Label>
-            <Input id="plan" {...register("plan")} placeholder="trial, basic, pro, enterprise" />
+            <Select
+              value={planValue}
+              onValueChange={(value) => setValue("plan", value as TenantPlan)}
+              disabled={isLoading}
+            >
+              <SelectTrigger id="plan">
+                <SelectValue placeholder="Select a plan" />
+              </SelectTrigger>
+              <SelectContent>
+                {TENANT_PLAN_OPTIONS.map((option) => (
+                  <SelectItem key={option} value={option}>
+                    {TENANT_PLAN_LABELS[option]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             {errors.plan && (
               <p className="text-sm text-destructive mt-1">{errors.plan.message}</p>
             )}

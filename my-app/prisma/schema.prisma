@@ -7,8 +7,9 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// MULTI-TENANT MODELS ROY  
 
+
+// MULTI-TENANT MODELS ROY  
 model Tenant {
   id           String       @id @default(cuid())
   name         String
@@ -169,21 +170,25 @@ model VerificationToken {
 
 // AUDIT LOG (Important for legal compliance)
 model AuditLog {
-  id         String  @id @default(cuid())
-  userId     String? // Who performed the action
-  tenantId   String? // Which tenant (for filtering)
-  action     String // CREATED, UPDATED, DELETED, VIEWED, etc.
-  resource   String // User, Case, Template, etc.
-  resourceId String? // ID of the resource
-  metadata   Json? // Additional data
-  ipAddress  String?
-  userAgent  String?
+  id           String  @id @default(cuid())
+  userId       String? // Who performed the action
+  tenantId     String? // Which tenant (for filtering)
+  action       String  // CREATED_CASE, ASSIGNED_CASE, UPDATED_CASE, DELETED_CASE, etc.
+  resource     String  // Case, User, Template, etc.
+  resourceId   String? // ID of the resource
+  oldValues    Json?   // Previous state (for diffs)
+  newValues    Json?   // New state (for compliance)
+  metadata     Json?   // Additional context
+  ipAddress    String?
+  userAgent    String?
+  description  String? // Human-readable log entry
 
   createdAt DateTime @default(now())
 
   @@index([userId])
   @@index([tenantId])
   @@index([action])
+  @@index([resourceId])
   @@index([createdAt])
   @@map("audit_logs")
 }
@@ -213,3 +218,4 @@ model Case {
   @@index([assignedToId])
   @@map("cases")
 }
+
