@@ -1,22 +1,53 @@
 "use server"
 
 import { prisma } from "@/lib/prisma"
-import { getServerSession } from "next-auth/next"
-import { authOptions } from "@/app/api/auth/[...nextauth]/route"
+import { auth } from "@/lib/auth"
 import { revalidatePath } from "next/cache"
 import Handlebars from "handlebars"
 import { generatePdf } from "@/lib/pdf-generator"
 import { uploadToStorage } from "@/lib/storage"
 import { encryptSensitiveData } from "@/lib/encryption"
-import type { DocumentTemplate } from "@prisma/client"
+import {
+  resolveTemplateContext,
+  SAMPLE_TEMPLATE_SOURCE,
+  TemplateDraftInput,
+  SignatureField,
+} from "@/lib/document-template-utils"
 
-/**
- * Get tenant context from NextAuth session
- */
-async function getTenantIdFromSession(): Promise<string> {
-  const session = await getServerSession(authOptions)
-  if (!session?.user?.tenantId) throw new Error("No tenant context")
-  return session.user.tenantId
+const db = prisma as unknown as {
+  documentTemplate: any
+  document: any
+  documentAuditLog: any
+}
+interface UserContext {
+  tenantId: string
+  userId: string
+  userEmail: string
+  role: string
+}
+
+async function requireUserContext(): Promise<UserContext> {
+  const session = await auth()
+  if (!session?.user?.id) {
+    throw new Error("Not authenticated")
+  }
+
+  if (!session.user.tenantId) {
+    throw new Error("No tenant context")
+  }
+
+  return {
+    tenantId: session.user.tenantId,
+    userId: session.user.id,
+    userEmail: session.user.email ?? "unknown",
+    role: session.user.role,
+  }
+}
+
+function ensureLawFirmAuthor(sessionRole: string) {
+  if (!["LAWFIRMOWNER", "LAWFIRMSTAFF"].includes(sessionRole)) {
+    throw new Error("Only law firm owners or staff can manage templates")
+  }
 }
 
 /**
@@ -24,11 +55,15 @@ async function getTenantIdFromSession(): Promise<string> {
  * Example: "Hello {{name}}, case {{caseId}}" → ["name", "caseId"]
  */
 function extractHandlebarFields(template: string): string[] {
-  const regex = /{{#?\s*(\w+)/g
+  const regex = /{{#?\s*([A-Za-z0-9_]+)/g
+  const reserved = new Set(["if", "each", "with", "unless", "else"])
   const fields = new Set<string>()
   let match
   while ((match = regex.exec(template)) !== null) {
-    fields.add(match[1])
+    const token = match[1]
+    if (!reserved.has(token)) {
+      fields.add(token)
+    }
   }
   return Array.from(fields)
 }
@@ -52,10 +87,8 @@ export async function createDocumentTemplate(input: {
   }>
 }): Promise<{ templateId: string }> {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session?.user?.id) throw new Error("Not authenticated")
-
-    const tenantId = await getTenantIdFromSession()
+    const context = await requireUserContext()
+    ensureLawFirmAuthor(context.role)
 
     // Extract required fields from template
     const requiredFields = extractHandlebarFields(input.htmlContent)
@@ -74,40 +107,55 @@ export async function createDocumentTemplate(input: {
       .replace(/\s+/g, "-")
       .replace(/[^a-z0-9-]/g, "")
 
-    const template = await prisma.documentTemplate.create({
+    // Ensure slug uniqueness within tenant
+    const existingTemplate = await db.documentTemplate.findUnique({
+      where: {
+        tenantId_slug: {
+          tenantId: context.tenantId,
+          slug,
+        },
+      },
+    })
+
+    if (existingTemplate) {
+      throw new Error(`Template with slug "${slug}" already exists`)
+    }
+
+    const template = await db.documentTemplate.create({
       data: {
-        tenantId,
+        tenantId: context.tenantId,
         name: input.name,
         slug,
         category: input.category,
         htmlContent: input.htmlContent,
-        requiredFields: requiredFields,
+        requiredFields,
         fieldMappings: input.fieldMappings,
         signatureFields: input.signatureFields || [],
-        createdBy: session.user.id,
+        createdBy: context.userId,
       },
       select: { id: true },
     })
 
-    // Log creation for audit
-    await prisma.documentAuditLog.create({
+    // Log creation in global audit log
+    await prisma.auditLog.create({
       data: {
-        tenantId,
-        documentId: "", // Not tied to specific document; it's template audit
+        tenantId: context.tenantId,
+        userId: context.userId,
         action: "TEMPLATE_CREATED",
-        actionDetails: JSON.stringify({
-          templateId: template.id,
+        resource: "DocumentTemplate",
+        resourceId: template.id,
+        metadata: {
+          slug,
           name: input.name,
           category: input.category,
           requiredFields,
-        }),
-        userId: session.user.id,
-        userEmail: session.user.email || "unknown",
+          note: `Template "${input.name}" created`,
+        },
       },
     })
 
     console.log("roy: template created", template.id)
-    revalidatePath("/portal/documents/templates")
+    revalidatePath("/portal/templates")
 
     return { templateId: template.id }
   } catch (error) {
@@ -129,29 +177,32 @@ export async function renderDocument(input: {
   recipientType: "client" | "third_party" | "opposing_counsel" | "witness"
 }): Promise<{ documentId: string; pdfUrl: string }> {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session?.user?.id) throw new Error("Not authenticated")
-
-    const tenantId = await getTenantIdFromSession()
+    const context = await requireUserContext()
+    ensureLawFirmAuthor(context.role)
 
     // Fetch template
-    const template = await prisma.documentTemplate.findFirst({
-      where: { id: input.templateId, tenantId },
+    const template = await db.documentTemplate.findFirst({
+      where: { id: input.templateId, tenantId: context.tenantId },
     })
     if (!template) throw new Error("Template not found")
 
     // Fetch case with related data
     const caseData = await prisma.case.findFirst({
-      where: { id: input.caseId, tenantId },
+      where: { id: input.caseId, tenantId: context.tenantId },
       include: {
         assignedTo: true,
         tenant: true,
+        // Add additional relations (clients, contacts) here as schema grows
       },
     })
     if (!caseData) throw new Error("Case not found")
 
     // Build context object from field mappings
-    const context = buildContext(caseData, template.fieldMappings as Record<string, string>)
+    const populatedContext = resolveTemplateContext(template.fieldMappings as Record<string, string>, {
+      ...caseData,
+      case: caseData,
+      assignedUser: caseData.assignedTo,
+    })
 
     // Compile Handlebars template
     const handlebars = Handlebars.create()
@@ -160,7 +211,7 @@ export async function renderDocument(input: {
     // Render HTML
     let renderedHtml: string
     try {
-      renderedHtml = compiled(context)
+      renderedHtml = compiled(populatedContext)
     } catch (err) {
       console.error("roy: handlebars render error:", err)
       throw new Error("Failed to render template with case data")
@@ -173,16 +224,16 @@ export async function renderDocument(input: {
     })
 
     // Upload to storage
-    const storagePath = `documents/${tenantId}/${input.caseId}/${Date.now()}.pdf`
+    const storagePath = `documents/${context.tenantId}/${input.caseId}/${Date.now()}.pdf`
     const pdfUrl = await uploadToStorage(storagePath, pdfBuffer)
 
     // Encrypt sensitive substituted values
-    const encryptedValues = await encryptSensitiveData(context)
+    const encryptedValues = await encryptSensitiveData(populatedContext)
 
     // Create document record
-    const document = await prisma.document.create({
+    const document = await db.document.create({
       data: {
-        tenantId,
+        tenantId: context.tenantId,
         templateId: input.templateId,
         caseId: input.caseId,
         title: `${template.name} - ${caseData.title}`,
@@ -194,25 +245,26 @@ export async function renderDocument(input: {
         pdfUrl: pdfUrl,
         pdfStoragePath: storagePath,
         substitutedValues: encryptedValues,
-        createdBy: session.user.id,
+        createdBy: context.userId,
+        sentBy: context.userId,
       },
       select: { id: true, pdfUrl: true },
     })
 
     // Log rendering for audit
-    await prisma.documentAuditLog.create({
+    await db.documentAuditLog.create({
       data: {
-        tenantId,
+        tenantId: context.tenantId,
         documentId: document.id,
         action: "DOCUMENT_RENDERED",
         actionDetails: JSON.stringify({
           templateId: input.templateId,
           caseId: input.caseId,
           recipientEmail: input.recipientEmail,
-          fieldsSubstituted: Object.keys(context),
+          fieldsSubstituted: Object.keys(populatedContext),
         }),
-        userId: session.user.id,
-        userEmail: session.user.email || "unknown",
+        userId: context.userId,
+        userEmail: context.userEmail,
         newValues: {
           status: "rendered",
           pdfUrl: pdfUrl,
@@ -237,20 +289,20 @@ export async function renderDocument(input: {
  * Maps: { clientName: "case.client.name" } → actual values
  */
 function buildContext(
-  caseData: any,
+  sourceData: Record<string, any>,
   fieldMappings: Record<string, string>
 ): Record<string, any> {
   const context: Record<string, any> = {}
 
   for (const [templateVar, dataPath] of Object.entries(fieldMappings)) {
     try {
-      // Simple path traversal: "case.client.name" → caseData.client.name
       const parts = dataPath.split(".")
-      let value: any = caseData
+      let value: any = sourceData
       for (const part of parts) {
-        value = value?.[part]
+        if (value === null || value === undefined) break
+        value = value[part]
       }
-      context[templateVar] = value || ""
+      context[templateVar] = value ?? ""
     } catch (err) {
       console.warn(`roy: failed to resolve ${dataPath}`, err)
       context[templateVar] = ""
@@ -268,30 +320,28 @@ export async function markDocumentSent(
   sentVia: string
 ): Promise<void> {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session?.user?.id) throw new Error("Not authenticated")
+    const context = await requireUserContext()
+    ensureLawFirmAuthor(context.role)
 
-    const tenantId = await getTenantIdFromSession()
-
-    await prisma.document.update({
+    await db.document.update({
       where: { id: documentId },
       data: {
         status: "sent",
         sentAt: new Date(),
-        sentBy: session.user.id,
+        sentBy: context.userId,
         sentVia: sentVia,
       },
     })
 
     // Audit log
-    await prisma.documentAuditLog.create({
+    await db.documentAuditLog.create({
       data: {
-        tenantId,
+        tenantId: context.tenantId,
         documentId,
         action: "DOCUMENT_SENT",
         actionDetails: JSON.stringify({ sentVia }),
-        userId: session.user.id,
-        userEmail: session.user.email || "unknown",
+        userId: context.userId,
+        userEmail: context.userEmail,
         newValues: { status: "sent", sentVia },
       },
     })
@@ -312,12 +362,9 @@ export async function recordDocumentSignature(
   signatureUrl?: string
 ): Promise<void> {
   try {
-    const session = await getServerSession(authOptions)
-    if (!session?.user?.id) throw new Error("Not authenticated")
+    const context = await requireUserContext()
 
-    const tenantId = await getTenantIdFromSession()
-
-    await prisma.document.update({
+    await db.document.update({
       where: { id: documentId },
       data: {
         status: "signed",
@@ -328,14 +375,14 @@ export async function recordDocumentSignature(
     })
 
     // Audit log
-    await prisma.documentAuditLog.create({
+    await db.documentAuditLog.create({
       data: {
-        tenantId,
+        tenantId: context.tenantId,
         documentId,
         action: "DOCUMENT_SIGNED",
         actionDetails: JSON.stringify({ signedBy }),
-        userId: session.user.id,
-        userEmail: session.user.email || "unknown",
+        userId: context.userId,
+        userEmail: context.userEmail,
         newValues: { status: "signed", signedAt: new Date() },
       },
     })
@@ -345,4 +392,50 @@ export async function recordDocumentSignature(
     console.error("roy: recordDocumentSignature error:", error)
     throw error
   }
+}
+
+export async function generateTemplatePreviewPdf(
+  draft: TemplateDraftInput
+): Promise<string> {
+  const context = resolveTemplateContext(draft.fieldMappings, SAMPLE_TEMPLATE_SOURCE)
+  const handlebars = Handlebars.create()
+  const compiled = handlebars.compile(draft.htmlContent || "<p>(empty template)</p>")
+  const renderedHtml = compiled(context)
+  const pdfBuffer = await generatePdf({
+    html: renderedHtml,
+    signatureFields: draft.signatureFields,
+  })
+  return Buffer.from(pdfBuffer).toString("base64")
+}
+
+export async function previewTemplateById(templateId: string): Promise<string> {
+  const context = await requireUserContext()
+  ensureLawFirmAuthor(context.role)
+
+  const template = await prisma.documentTemplate.findUnique({
+    where: {
+      tenantId_slug: {
+        tenantId: context.tenantId,
+        slug: templateId,
+      },
+    },
+  })
+
+  const record =
+    template ??
+    (await prisma.documentTemplate.findFirst({
+      where: { id: templateId, tenantId: context.tenantId },
+    }))
+
+  if (!record) {
+    throw new Error("Template not found")
+  }
+
+  return generateTemplatePreviewPdf({
+    name: record.name,
+    category: record.category,
+    htmlContent: record.htmlContent,
+    fieldMappings: record.fieldMappings as Record<string, string>,
+    signatureFields: record.signatureFields as unknown as SignatureField[] | undefined,
+  })
 }

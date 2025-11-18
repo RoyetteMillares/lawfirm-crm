@@ -1,4 +1,4 @@
-import * as nacl from "tweetnacl-js"
+import nacl from "tweetnacl"
 import { randomBytes } from "crypto"
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY // Must be 32 bytes, hex-encoded
@@ -10,7 +10,7 @@ if (!ENCRYPTION_KEY) {
 export async function encryptSensitiveData(
   data: Record<string, any>
 ): Promise<string> {
-  const keyBuffer = Buffer.from(ENCRYPTION_KEY, "hex")
+  const keyBuffer = Buffer.from(ENCRYPTION_KEY!, "hex")
   const nonce = randomBytes(24) // TweetNaCl requires 24-byte nonce
   const plaintext = Buffer.from(JSON.stringify(data))
 
@@ -23,9 +23,13 @@ export async function encryptSensitiveData(
 }
 
 export async function decryptSensitiveData(
-  encryptedData: string
+  encryptedData?: string | null
 ): Promise<Record<string, any>> {
-  const keyBuffer = Buffer.from(ENCRYPTION_KEY, "hex")
+  if (!encryptedData) {
+    throw new Error("Encrypted payload is missing")
+  }
+
+  const keyBuffer = Buffer.from(ENCRYPTION_KEY!, "hex")
   const combined = Buffer.from(encryptedData, "base64")
 
   const nonce = combined.slice(0, 24)

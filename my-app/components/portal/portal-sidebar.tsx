@@ -2,7 +2,15 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { Building2, Users, Settings, LayoutDashboard, Briefcase } from "lucide-react"
+import {
+  Building2,
+  Users,
+  Settings,
+  LayoutDashboard,
+  Briefcase,
+  FileText,
+  PenLine,
+} from "lucide-react"
 import { cn } from "@/lib/utils"
 
 interface PortalSidebarProps {
@@ -29,6 +37,20 @@ export function PortalSidebar({ user }: PortalSidebarProps) {
       href: "/portal/cases",
       icon: Briefcase,
       current: pathname?.startsWith("/portal/cases"),
+    },
+    {
+      name: "Templates",
+      href: "/portal/templates",
+      icon: FileText,
+      current: pathname?.startsWith("/portal/templates"),
+      show: ["LAWFIRMOWNER", "LAWFIRMSTAFF"].includes(user.role),
+    },
+    {
+      name: "Documents",
+      href: "/portal/documents",
+      icon: PenLine,
+      current: pathname?.startsWith("/portal/documents"),
+      show: ["LAWFIRMOWNER", "LAWFIRMSTAFF"].includes(user.role),
     },
     {
       name: "Users",

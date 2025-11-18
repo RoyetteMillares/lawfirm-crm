@@ -1,162 +1,233 @@
 "use client"
 
-import { useState, useTransition } from "react"
+import { useMemo, useState, useTransition } from "react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { createDocumentTemplate } from "@/app/portal/documents/actions"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  TemplateDraftInput,
+  SignatureField,
+  SAMPLE_TEMPLATE_SOURCE,
+  resolveTemplateContext,
+} from "@/lib/document-template-utils"
 
-interface SignatureField {
-  id: string
-  name: string
-  label: string
-  x: number
-  y: number
-  width: number
-  height: number
+interface DocumentTemplateBuilderProps {
+  onCreate: (payload: TemplateDraftInput) => Promise<void>
+  onPreviewPdf: (payload: TemplateDraftInput) => Promise<string>
 }
 
-export default function DocumentTemplateBuilder() {
+export default function DocumentTemplateBuilder({
+  onCreate,
+  onPreviewPdf,
+}: DocumentTemplateBuilderProps) {
   const [isPending, startTransition] = useTransition()
+  const [isPdfPreviewPending, startPdfPreview] = useTransition()
   const [name, setName] = useState("")
   const [category, setCategory] = useState("agreement")
   const [htmlContent, setHtmlContent] = useState("")
   const [signatureFields, setSignatureFields] = useState<SignatureField[]>([])
 
   const handleAddSignatureField = () => {
-    const newField: SignatureField = {
+    const field: SignatureField = {
       id: `sig-${Date.now()}`,
       name: `signature_${signatureFields.length + 1}`,
-      label: "Signature",
+      label: "Signer",
       x: 50,
-      y: 500 + signatureFields.length * 100,
-      width: 150,
-      height: 30,
+      y: 600 + signatureFields.length * 120,
+      width: 160,
+      height: 32,
     }
-    setSignatureFields([...signatureFields, newField])
+    setSignatureFields((prev) => [...prev, field])
   }
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
-
-    if (!name.trim() || !htmlContent.trim()) {
-      toast.error("Please fill in all fields")
-      return
-    }
-
-    // Extract field mappings from content (simple parser)
-    const fieldRegex = /{{(\w+)}}/g
+  const fieldMappings = useMemo(() => {
+    const regex = /{{\s*([A-Za-z0-9_]+)\s*}}/g
     const fields = new Set<string>()
     let match
-    while ((match = fieldRegex.exec(htmlContent)) !== null) {
+    while ((match = regex.exec(htmlContent)) !== null) {
       fields.add(match[1])
     }
+    const mappings: Record<string, string> = {}
+    fields.forEach((field) => {
+      mappings[field] = `case.${field}`
+    })
+    return mappings
+  }, [htmlContent])
 
-    // Build basic mappings (user will refine in next step)
-    const fieldMappings: Record<string, string> = {}
-    for (const field of fields) {
-      fieldMappings[field] = `case.${field}`
+  const previewHtml = useMemo(() => {
+    const context = resolveTemplateContext(fieldMappings, SAMPLE_TEMPLATE_SOURCE)
+    return htmlContent.replace(/{{\s*([A-Za-z0-9_]+)\s*}}/g, (_, key: string) => {
+      return context[key] ?? `{{${key}}}`
+    })
+  }, [htmlContent, fieldMappings])
+
+  const buildPayload = (): TemplateDraftInput => ({
+    name: name.trim() || "Untitled template",
+    category,
+    htmlContent,
+    fieldMappings,
+    signatureFields: signatureFields.length ? signatureFields : undefined,
+  })
+
+  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+
+    if (!name.trim() || !htmlContent.trim()) {
+      toast.error("Template name and content are required")
+      return
     }
 
     startTransition(async () => {
       try {
-        const result = await createDocumentTemplate({
-          name,
-          category,
-          htmlContent,
-          fieldMappings,
-          signatureFields: signatureFields.length > 0 ? signatureFields : undefined,
-        })
-        toast.success("Template created successfully")
-        // Reset form
+        await onCreate(buildPayload())
+
+        toast.success("Template created")
         setName("")
         setHtmlContent("")
         setSignatureFields([])
       } catch (error) {
-        toast.error(
-          error instanceof Error ? error.message : "Failed to create template"
-        )
+        const message = error instanceof Error ? error.message : "Failed to save template"
+        toast.error(message)
+      }
+    })
+  }
+
+  const handlePreviewPdfClick = () => {
+    if (!htmlContent.trim()) {
+      toast.error("Add template content before generating a preview")
+      return
+    }
+
+    startPdfPreview(async () => {
+      try {
+        const base64 = await onPreviewPdf(buildPayload())
+        const byteCharacters = atob(base64)
+        const byteNumbers = new Array(byteCharacters.length)
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i)
+        }
+        const blob = new Blob([new Uint8Array(byteNumbers)], { type: "application/pdf" })
+        const url = URL.createObjectURL(blob)
+        window.open(url, "_blank", "noopener")
+        toast.success("Sample PDF opened in a new tab")
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to generate preview"
+        toast.error(message)
       }
     })
   }
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
-      <div className="space-y-2">
-        <Label htmlFor="name">Template Name</Label>
-        <Input
-          id="name"
-          placeholder="E.g. Retainer Agreement"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          disabled={isPending}
-        />
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="space-y-2">
+          <Label htmlFor="template-name">Template name</Label>
+          <Input
+            id="template-name"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="Retainer Agreement"
+            disabled={isPending}
+          />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="template-category">Category</Label>
+          <select
+            id="template-category"
+            value={category}
+            onChange={(event) => setCategory(event.target.value)}
+            className="w-full rounded-md border px-3 py-2 text-sm"
+            disabled={isPending}
+          >
+            <option value="agreement">Agreement</option>
+            <option value="demand">Demand Letter</option>
+            <option value="settlement">Settlement Offer</option>
+            <option value="intake">Intake Form</option>
+            <option value="motion">Motion</option>
+          </select>
+        </div>
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="category">Category</Label>
-        <select
-          id="category"
-          value={category}
-          onChange={(e) => setCategory(e.target.value)}
-          disabled={isPending}
-          className="w-full px-3 py-2 border rounded-md"
-        >
-          <option value="agreement">Agreement</option>
-          <option value="demand">Demand Letter</option>
-          <option value="settlement">Settlement Offer</option>
-          <option value="intake">Intake Form</option>
-          <option value="motion">Motion</option>
-        </select>
-      </div>
-
-      <div className="space-y-2">
-        <Label htmlFor="content">
-          Template Content (Use {{fieldName}} for variables)
+        <Label htmlFor="template-html">
+          Template content <span className="text-muted-foreground text-xs">(use {"{{field}}"})</span>
         </Label>
         <Textarea
-          id="content"
-          placeholder="Client {{clientName}} agrees to retain {{firmName}} for legal services regarding case {{caseId}}..."
+          id="template-html"
           value={htmlContent}
-          onChange={(e) => setHtmlContent(e.target.value)}
+          onChange={(event) => setHtmlContent(event.target.value)}
+          placeholder="Client {{clientName}} agrees to retain {{firmName}}..."
+          className="min-h-[240px]"
           disabled={isPending}
-          className="min-h-64"
         />
-        <p className="text-xs text-gray-500">
-          Use double curly braces for variables: {{"{clientName}}"}}
-        </p>
       </div>
 
-      <div className="space-y-4">
-        <Label>Signature Fields</Label>
-        {signatureFields.map((field, idx) => (
-          <div key={field.id} className="p-3 border rounded-md bg-gray-50">
-            <p className="text-sm font-medium">{field.label}</p>
-            <button
-              type="button"
-              onClick={() =>
-                setSignatureFields(signatureFields.filter((_, i) => i !== idx))
-              }
-              className="text-xs text-red-600 hover:underline"
-            >
-              Remove
-            </button>
-          </div>
-        ))}
-        <Button
-          type="button"
-          variant="outline"
-          onClick={handleAddSignatureField}
-          disabled={isPending}
-        >
-          + Add Signature Field
-        </Button>
-      </div>
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle className="text-base">Signature fields</CardTitle>
+          <Button type="button" variant="outline" size="sm" onClick={handleAddSignatureField} disabled={isPending}>
+            + Add field
+          </Button>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {signatureFields.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No signature fields added yet.</p>
+          ) : (
+            signatureFields.map((field, index) => (
+              <div key={field.id} className="flex items-center justify-between rounded-md border p-3 text-sm">
+                <div>
+                  <p className="font-medium">{field.label}</p>
+                  <p className="text-xs text-muted-foreground">
+                    Position: ({field.x}, {field.y}) – Size: {field.width}×{field.height}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() =>
+                    setSignatureFields((prev) => prev.filter((_, currentIndex) => currentIndex !== index))
+                  }
+                >
+                  Remove
+                </Button>
+              </div>
+            ))
+          )}
+        </CardContent>
+      </Card>
 
-      <Button type="submit" disabled={isPending} className="w-full">
-        {isPending ? "Creating..." : "Create Template"}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Live preview</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <div
+            className="min-h-[200px] rounded-md border bg-white p-4 text-sm"
+            dangerouslySetInnerHTML={{
+              __html: previewHtml || "<p class='text-muted-foreground'>Start typing to preview…</p>",
+            }}
+          />
+          <p className="text-xs text-muted-foreground">
+            Preview uses sample data (e.g., Jane Doe, Smith v. State). Actual case values will replace the
+            placeholders when you generate documents.
+          </p>
+        </CardContent>
+      </Card>
+
+      <Button type="submit" disabled={isPending}>
+        {isPending ? "Creating…" : "Create template"}
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        disabled={isPdfPreviewPending || !htmlContent.trim()}
+        onClick={handlePreviewPdfClick}
+      >
+        {isPdfPreviewPending ? "Rendering preview…" : "Generate sample PDF"}
       </Button>
     </form>
   )
