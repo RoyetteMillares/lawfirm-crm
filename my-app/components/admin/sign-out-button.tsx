@@ -7,6 +7,7 @@ import { LogOut } from "lucide-react"
 export function AdminSignOutButton() {
   return (
     <Button
+      justify="start"
       variant="ghost"
       className="w-full flex items-center gap-2 mt-4 text-left"
       onClick={() => signOut({ callbackUrl: "/auth/signin" })}

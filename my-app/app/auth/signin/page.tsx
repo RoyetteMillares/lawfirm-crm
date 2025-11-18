@@ -19,14 +19,14 @@ export default function SignInPage() {
   const handleEmailSignIn = async (e: React.FormEvent) => {
     e.preventDefault()
     setIsLoading(true)
-
+  
     try {
       const result = await signIn("credentials", {
         email,
         password,
         redirect: false,
       })
-
+  
       if (result?.error) {
         // Check error type and show appropriate message
         if (result.error.includes("verify")) {
@@ -47,10 +47,25 @@ export default function SignInPage() {
           })
         }
       } else if (result?.ok) {
-        toast.success("Welcome back!", {
-          description: "Redirecting to dashboard..."
-        })
-        router.push("/dashboard")
+        // Roy: Fetch session to determine user role after successful login
+        const res = await fetch("/api/auth/session")
+        const session = await res.json()
+        const role = session?.user?.role
+  
+        // Roy: Redirect user to their appropriate dashboard based on role
+        if (role === "ADMIN") {
+          toast.success("Welcome back!", { description: "Redirecting to admin dashboard..." })
+          router.push("/admin")
+        } else if (role === "LAWFIRMOWNER" || role === "LAWFIRMSTAFF") {
+          toast.success("Welcome back!", { description: "Redirecting to portal..." })
+          router.push("/portal")
+        } else if (role === "ENDUSER") {
+          toast.success("Welcome back!", { description: "Redirecting to dashboard..." })
+          router.push("/dashboard")
+        } else {
+          toast.success("Welcome back!", { description: "Redirecting to homepage..." })
+          router.push("/")
+        }
         router.refresh()
       }
     } catch (error: any) {
@@ -61,6 +76,7 @@ export default function SignInPage() {
       setIsLoading(false)
     }
   }
+  
 
   const handleGoogleSignIn = async () => {
     setIsLoading(true)

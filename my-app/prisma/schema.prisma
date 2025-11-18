@@ -10,41 +10,41 @@ datasource db {
 // MULTI-TENANT MODELS ROY  
 
 model Tenant {
-  id          String       @id @default(cuid())
-  name        String       
-  slug        String       @unique
-  status      TenantStatus @default(TRIAL)
-  plan        String       @default("trial") // trial, basic, pro, enterprise
-  
+  id           String       @id @default(cuid())
+  name         String
+  slug         String       @unique
+  status       TenantStatus @default(TRIAL)
+  plan         String       @default("trial") // trial, basic, pro, enterprise
+  cases        Case[]
   // Contact & Settings
   contactEmail String?
   contactPhone String?
   website      String?
   address      String?
   settings     Json?
-  
+
   // Branding (optional)
   logo         String?
-  primaryColor String?     // Hex color code
-  
+  primaryColor String? // Hex color code
+
   // Timestamps
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   // Relations
   users       User[]
   invitations TenantInvitation[]
-  
+
   @@index([slug])
   @@index([status])
   @@map("tenants")
 }
 
 enum TenantStatus {
-  TRIAL       // 20-day trial
-  ACTIVE      // Paying customer
-  SUSPENDED   // Payment failed
-  CANCELED    // Subscription canceled
+  TRIAL // 20-day trial
+  ACTIVE // Paying customer
+  SUSPENDED // Payment failed
+  CANCELED // Subscription canceled
 }
 
 // ============================================
@@ -55,30 +55,31 @@ model User {
   id            String    @id @default(cuid())
   email         String?   @unique
   name          String?
-  passwordHash  String?   // Only for email/password users roy
+  passwordHash  String? // Only for email/password users roy
   image         String?
   emailVerified DateTime?
-  
+  assignedCases Case[]    @relation("AssignedCases")
+
   // Multi-tenant fields
-  role          UserRole   @default(ENDUSER)
-  tenantId      String?    // null for platform admins
-  status        UserStatus @default(ACTIVE)
-  
+  role     UserRole   @default(ENDUSER)
+  tenantId String? // null for platform admins
+  status   UserStatus @default(ACTIVE)
+
   // Profile
-  phone         String?
-  title         String?    // Job title (e.g., "Partner", "Associate")
-  bio           String?    @db.Text
-  
+  phone String?
+  title String? // Job title (e.g., "Partner", "Associate")
+  bio   String? @db.Text
+
   // Timestamps
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  lastLoginAt   DateTime?
-  
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  lastLoginAt DateTime?
+
   // Relations
-  tenant        Tenant?   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  accounts      Account[]
-  sessions      Session[]
-  
+  tenant   Tenant?   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  accounts Account[]
+  sessions Session[]
+
   @@index([tenantId])
   @@index([role])
   @@index([email])
@@ -87,37 +88,36 @@ model User {
 }
 
 enum UserRole {
-  ADMIN           // Platform administrator (Legal Fusion owner)
-  LAWFIRMOWNER    // Tenant owner (can manage everything in their tenant)
-  LAWFIRMSTAFF    // Tenant staff member (limited access)
-  ENDUSER         // End client (can only see their own cases)
+  ADMIN // Platform administrator (Legal Fusion owner)
+  LAWFIRMOWNER // Tenant owner (can manage everything in their tenant)
+  LAWFIRMSTAFF // Tenant staff member (limited access)
+  ENDUSER // End client (can only see their own cases)
 }
 
 enum UserStatus {
-  ACTIVE              // Can sign in
-  DISABLED            // Cannot sign in
-  PENDING_INVITATION  // Invited but not accepted
+  ACTIVE // Can sign in
+  DISABLED // Cannot sign in
+  PENDING_INVITATION // Invited but not accepted
 }
 
 // TENANT INVITATIONS
 
-
 model TenantInvitation {
-  id          String   @id @default(cuid())
-  email       String
-  role        UserRole
-  tenantId    String
-  token       String   @unique
-  expiresAt   DateTime
-  acceptedAt  DateTime?
-  
-  invitedBy   String
-  
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  
-  tenant      Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  
+  id         String    @id @default(cuid())
+  email      String
+  role       UserRole
+  tenantId   String
+  token      String    @unique
+  expiresAt  DateTime
+  acceptedAt DateTime?
+
+  invitedBy String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
   @@index([email])
   @@index([token])
   @@index([tenantId])
@@ -151,7 +151,7 @@ model Session {
   sessionToken String   @unique
   userId       String
   expires      DateTime
-  
+
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
@@ -167,24 +167,49 @@ model VerificationToken {
   @@map("verification_tokens")
 }
 
-
 // AUDIT LOG (Important for legal compliance)
 model AuditLog {
-  id          String   @id @default(cuid())
-  userId      String?  // Who performed the action
-  tenantId    String?  // Which tenant (for filtering)
-  action      String   // CREATED, UPDATED, DELETED, VIEWED, etc.
-  resource    String   // User, Case, Template, etc.
-  resourceId  String?  // ID of the resource
-  metadata    Json?    // Additional data
-  ipAddress   String?
-  userAgent   String?
-  
-  createdAt   DateTime @default(now())
-  
+  id         String  @id @default(cuid())
+  userId     String? // Who performed the action
+  tenantId   String? // Which tenant (for filtering)
+  action     String // CREATED, UPDATED, DELETED, VIEWED, etc.
+  resource   String // User, Case, Template, etc.
+  resourceId String? // ID of the resource
+  metadata   Json? // Additional data
+  ipAddress  String?
+  userAgent  String?
+
+  createdAt DateTime @default(now())
+
   @@index([userId])
   @@index([tenantId])
   @@index([action])
   @@index([createdAt])
   @@map("audit_logs")
+}
+
+enum CaseStatus {
+  OPEN
+  CLOSED
+  PENDING
+  ON_HOLD
+  DELETED
+}
+
+model Case {
+  id           String     @id @default(cuid())
+  tenantId     String
+  title        String
+  description  String?
+  status       CaseStatus @default(OPEN)
+  assignedToId String?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  tenant     Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignedTo User?  @relation("AssignedCases", fields: [assignedToId], references: [id])
+
+  @@index([tenantId])
+  @@index([assignedToId])
+  @@map("cases")
 }
