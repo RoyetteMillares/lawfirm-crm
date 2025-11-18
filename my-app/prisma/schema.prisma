@@ -36,6 +36,11 @@ model Tenant {
   users       User[]
   invitations TenantInvitation[]
 
+   // NEW: Document relations
+  documentTemplates DocumentTemplate[]
+  documents         Document[]
+  documentAuditLogs DocumentAuditLog[]
+
   @@index([slug])
   @@index([status])
   @@map("tenants")
@@ -213,9 +218,177 @@ model Case {
 
   tenant     Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   assignedTo User?  @relation("AssignedCases", fields: [assignedToId], references: [id])
+   documents    Document[] // NEW: Link to generated documents
 
   @@index([tenantId])
   @@index([assignedToId])
   @@map("cases")
 }
 
+// ============================================
+// DOCUMENT TEMPLATE MANAGEMENT
+// ============================================
+
+model DocumentTemplate {
+  id              String    @id @default(cuid())
+  tenantId        String
+  name            String    // "Retainer Agreement", "Settlement Offer"
+  slug            String    // URL-friendly identifier
+  description     String?   @db.Text
+  category        String    // "agreement", "demand", "settlement", "intake", "motion"
+  
+  // Template content (Handlebars syntax with {{variables}})
+  // Example: "Client {{clientName}} agrees to retain {{firmName}}"
+  htmlContent     String    @db.Text
+  
+  // List of required variables this template uses
+  // Auto-extracted from handlebars placeholders
+  requiredFields  Json      // ["clientName", "caseId", "amount", "date"]
+  
+  // Field mappings: template variable → case/user data path
+  // { clientName: "case.client.name", amount: "case.settlementAmount" }
+  fieldMappings   Json
+  
+  // Signature fields: positions and labels for DocuSign/PDF
+  // [{ id: "sig1", name: "clientSignature", label: "Client Signature", x: 100, y: 200, width: 150, height: 30 }]
+  signatureFields Json?
+  
+  // Version control
+  version         Int       @default(1)
+  previousVersionId String? // Link to prior version
+  
+  // Metadata
+  isPublished     Boolean   @default(false)
+  isArchived      Boolean   @default(false)
+  createdBy       String    // User ID
+  publishedBy     String?   // User ID who published
+  publishedAt     DateTime?
+  
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  documents       Document[]
+  
+  @@unique([tenantId, slug])
+  @@index([tenantId])
+  @@index([category])
+  @@index([isPublished])
+  @@map("document_templates")
+}
+
+// ============================================
+// GENERATED DOCUMENTS (from templates)
+// ============================================
+
+model Document {
+  id                String    @id @default(cuid())
+  tenantId          String
+  templateId        String
+  caseId            String
+  
+  // Document metadata
+  title             String    // "Retainer Agreement - Smith vs. State"
+  internalNotes     String?   @db.Text
+  
+  // Document state
+  status            String    @default("draft") // "draft", "rendered", "sent", "signed", "completed", "rejected", "expired"
+  
+  // Recipient info
+  recipientEmail    String
+  recipientName     String?
+  recipientType     String    // "client", "third_party", "opposing_counsel", "witness"
+  
+  // Document content
+  renderedHtml      String?   @db.Text // Filled HTML (before PDF)
+  pdfUrl            String?   // S3/GCS URL to rendered PDF
+  pdfStoragePath    String?   // Internal storage identifier
+  
+  // Field substitution log (for audit trail)
+  // { clientName: "John Doe", caseId: "CASE-2025-001", amount: "$50,000" }
+  substitutedValues Json      // Encrypted - what values were used
+  
+  // Signature tracking
+  signatureData     Json?     // Signature image/metadata if signed locally
+  signedAt          DateTime?
+  signedBy          String?   // Email or ID of signer
+  signatureUrl      String?   // URL to signed document
+  
+  // DocuSign integration
+  docusignEnvelopeId String?
+  docusignStatus    String?   // "sent", "signed", "voided"
+  docusignSignedAt  DateTime?
+  
+  // External integrations
+  ghlContactId      String?   // GoHighLevel contact ID (for CRM sync)
+  externalStatus    String?   // Sync status with third-party systems
+  
+  // Distribution
+  sentAt            DateTime?
+  sentBy            String    // User ID who sent it
+  sentVia           String?   // "email", "docusign", "ghl", "manual"
+  viewedAt          DateTime?
+  viewedCount       Int       @default(0)
+  
+  // Rejection/Expiration
+  rejectedAt        DateTime?
+  rejectionReason   String?
+  expiresAt         DateTime? // For time-limited documents
+  
+  // Audit
+  createdBy         String    // User ID who created
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  template          DocumentTemplate @relation(fields: [templateId], references: [id])
+  case              Case      @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  auditLogs         DocumentAuditLog[]
+  
+  @@index([tenantId])
+  @@index([caseId])
+  @@index([templateId])
+  @@index([status])
+  @@index([recipientEmail])
+  @@index([createdAt])
+  @@map("documents")
+}
+
+// ============================================
+// AUDIT LOGGING (Compliance)
+// ============================================
+
+model DocumentAuditLog {
+  id            String    @id @default(cuid())
+  tenantId      String
+  documentId    String
+  
+  action        String    // "TEMPLATE_CREATED", "DOCUMENT_RENDERED", "DOCUMENT_SENT", "DOCUMENT_SIGNED", "FIELD_SUBSTITUTED"
+  actionDetails String    @db.Text // JSON with specific details
+  
+  // Who, What, When, Where, Why
+  userId        String    // User ID performing action
+  userEmail     String    // Email for audit trail
+  timestamp     DateTime  @default(now())
+  ipAddress     String?
+  userAgent     String?
+  
+  // What was changed
+  oldValues     Json?     // Previous state (for updates)
+  newValues     Json?     // New state
+  
+  // Compliance metadata
+  complianceContext String? // "GLBA", "HIPAA", "CCPA", etc.
+  
+  createdAt     DateTime  @default(now())
+  
+  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  document      Document  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  
+  @@index([tenantId])
+  @@index([documentId])
+  @@index([action])
+  @@index([userId])
+  @@index([timestamp])
+  @@map("document_audit_logs")
+}
