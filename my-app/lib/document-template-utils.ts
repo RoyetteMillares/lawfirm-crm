@@ -6,6 +6,7 @@ export interface SignatureField {
   y: number
   width: number
   height: number
+  value?: string | null // Base64 image data or URL when signed
 }
 
 export interface TemplateDraftInput {
@@ -35,10 +36,13 @@ export const SAMPLE_TEMPLATE_SOURCE = {
     name: "Aurora Legal Group",
     email: "hello@auroralegal.com",
     phone: "(555) 987-6543",
+    address: "123 Main Street, Springfield, NY",
   },
   assignedUser: {
     name: "Alex Morgan, Esq.",
     email: "alex@auroralegal.com",
+    phone: "(555) 987-6543",
+    address: "123 Main Street, Springfield, NY",
   },
   date: "January 15, 2026",
   amount: "$50,000",
@@ -66,4 +70,3 @@ export function resolveTemplateContext(
 
   return context
 }
-

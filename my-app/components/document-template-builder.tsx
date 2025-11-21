@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState, useTransition } from "react"
+import { useMemo, useState, useTransition, useRef, useEffect } from "react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -13,6 +13,7 @@ import {
   SAMPLE_TEMPLATE_SOURCE,
   resolveTemplateContext,
 } from "@/lib/document-template-utils"
+import { GripVertical, X } from "lucide-react"
 
 interface DocumentTemplateBuilderProps {
   onCreate: (payload: TemplateDraftInput) => Promise<void>
@@ -29,19 +30,110 @@ export default function DocumentTemplateBuilder({
   const [category, setCategory] = useState("agreement")
   const [htmlContent, setHtmlContent] = useState("")
   const [signatureFields, setSignatureFields] = useState<SignatureField[]>([])
+  
+  // Dragging state
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [draggingId, setDraggingId] = useState<string | null>(null)
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 })
 
   const handleAddSignatureField = () => {
+    // Default position near the top or below last field
+    const lastField = signatureFields[signatureFields.length - 1]
+    const startY = lastField ? lastField.y + 50 : 100
+
     const field: SignatureField = {
       id: `sig-${Date.now()}`,
       name: `signature_${signatureFields.length + 1}`,
       label: "Signer",
-      x: 50,
-      y: 600 + signatureFields.length * 120,
-      width: 160,
-      height: 32,
+      x: 100,
+      y: startY,
+      width: 200,
+      height: 60,
     }
     setSignatureFields((prev) => [...prev, field])
   }
+
+  const updateField = (id: string, updates: Partial<SignatureField>) => {
+    setSignatureFields((prev) =>
+      prev.map((field) => (field.id === id ? { ...field, ...updates } : field))
+    )
+  }
+
+  const removeField = (id: string) => {
+    setSignatureFields((prev) => prev.filter((field) => field.id !== id))
+  }
+
+  // Drag handlers
+  const handleMouseDown = (e: React.MouseEvent, field: SignatureField) => {
+    e.preventDefault()
+    setDraggingId(field.id)
+    
+    // Calculate offset from top-left of the element
+    // We need this so the element doesn't "jump" to the cursor
+    // e.clientX is global, field.x is relative to container
+    // But simpler: just track the cursor movement
+    // OR: Calculate offset relative to the element's corner
+    
+    // Better approach:
+    // Get the mouse position relative to the element
+    // But we need to update X/Y relative to container
+    
+    // Let's store the initial click offset within the element
+    // e.nativeEvent.offsetX ??
+    
+    // Let's stick to standard method:
+    // when mouse down, record where in the box we clicked.
+    // but since we rely on container-relative coordinates for updates...
+    
+    // Easier:
+    // 1. Get container bounds
+    if (!containerRef.current) return
+    const containerRect = containerRef.current.getBoundingClientRect()
+    
+    // 2. Get mouse position relative to container
+    const mouseX = e.clientX - containerRect.left
+    const mouseY = e.clientY - containerRect.top
+    
+    // 3. Offset = MousePos - ElementPos
+    setDragOffset({
+      x: mouseX - field.x,
+      y: mouseY - field.y
+    })
+  }
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!draggingId || !containerRef.current) return
+    
+    e.preventDefault()
+    
+    const containerRect = containerRef.current.getBoundingClientRect()
+    const mouseX = e.clientX - containerRect.left
+    const mouseY = e.clientY - containerRect.top
+    
+    // New position = MousePos - DragOffset
+    let newX = mouseX - dragOffset.x
+    let newY = mouseY - dragOffset.y
+    
+    // Constrain to bounds (optional, but good UX)
+    newX = Math.max(0, Math.min(newX, containerRect.width - 50))
+    newY = Math.max(0, newY)
+    
+    updateField(draggingId, { x: Math.round(newX), y: Math.round(newY) })
+  }
+
+  const handleMouseUp = () => {
+    setDraggingId(null)
+  }
+  
+  // Global mouse up to catch drags that go outside
+  useEffect(() => {
+    const handleGlobalMouseUp = () => setDraggingId(null)
+    if (draggingId) {
+      window.addEventListener('mouseup', handleGlobalMouseUp)
+    }
+    return () => window.removeEventListener('mouseup', handleGlobalMouseUp)
+  }, [draggingId])
+
 
   const fieldMappings = useMemo(() => {
     const regex = /{{\s*([A-Za-z0-9_]+)\s*}}/g
@@ -151,84 +243,123 @@ export default function DocumentTemplateBuilder({
         </div>
       </div>
 
-      <div className="space-y-2">
-        <Label htmlFor="template-html">
-          Template content <span className="text-muted-foreground text-xs">(use {"{{field}}"})</span>
-        </Label>
-        <Textarea
-          id="template-html"
-          value={htmlContent}
-          onChange={(event) => setHtmlContent(event.target.value)}
-          placeholder="Client {{clientName}} agrees to retain {{firmName}}..."
-          className="min-h-[240px]"
-          disabled={isPending}
-        />
+      <div className="grid gap-6 lg:grid-cols-2">
+        {/* LEFT COLUMN: Editor */}
+        <div className="space-y-6">
+          <div className="space-y-2">
+            <Label htmlFor="template-html">
+              Template Content (HTML) <span className="text-muted-foreground text-xs">(use {"{{field}}"})</span>
+            </Label>
+            <Textarea
+              id="template-html"
+              value={htmlContent}
+              onChange={(event) => setHtmlContent(event.target.value)}
+              placeholder="Client {{clientName}} agrees to retain {{firmName}}..."
+              className="min-h-[400px] font-mono text-sm"
+              disabled={isPending}
+            />
+          </div>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between py-3">
+              <CardTitle className="text-base">Signature Fields</CardTitle>
+              <Button type="button" variant="outline" size="sm" onClick={handleAddSignatureField} disabled={isPending}>
+                + Add Field
+              </Button>
+            </CardHeader>
+            <CardContent className="grid gap-2 p-3">
+              {signatureFields.length === 0 && (
+                 <p className="text-sm text-muted-foreground text-center py-4">No fields yet. Add one to drag & drop on the preview.</p>
+              )}
+              {signatureFields.map((field) => (
+                <div key={field.id} className="flex items-center gap-2 rounded border p-2 text-sm bg-muted/40">
+                   <Input 
+                     value={field.label} 
+                     onChange={(e) => updateField(field.id, { label: e.target.value })}
+                     className="h-8 w-32"
+                   />
+                   <span className="text-xs text-muted-foreground flex-1">
+                     ({field.x}, {field.y})
+                   </span>
+                   <Button type="button" variant="ghost" size="icon" onClick={() => removeField(field.id)}>
+                     <X className="h-4 w-4" />
+                   </Button>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* RIGHT COLUMN: Visual Preview */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <Label>Visual Preview (Drag fields here)</Label>
+            <div className="text-xs text-muted-foreground">Letter Size (8.5" x 11")</div>
+          </div>
+          
+          <div className="overflow-auto rounded-md border bg-gray-100 p-4 h-[800px] flex justify-center">
+             {/* This container simulates the PDF page */}
+             <div 
+               ref={containerRef}
+               className="relative bg-white shadow-sm"
+               style={{ 
+                 width: '816px', // 8.5in * 96px
+                 minHeight: '1056px', // 11in * 96px
+                 padding: '48px', // 0.5in margin
+               }}
+               onMouseMove={handleMouseMove}
+               onMouseUp={handleMouseUp}
+               onMouseLeave={handleMouseUp}
+             >
+                {/* Content Layer */}
+                <div 
+                  className="prose max-w-none pointer-events-none select-none" 
+                  dangerouslySetInnerHTML={{
+                    __html: previewHtml || "<p class='text-muted-foreground'>Start typing content...</p>",
+                  }}
+                />
+
+                {/* Interaction Layer */}
+                {signatureFields.map((field) => (
+                  <div
+                    key={field.id}
+                    onMouseDown={(e) => handleMouseDown(e, field)}
+                    style={{
+                      left: field.x,
+                      top: field.y,
+                      width: field.width,
+                      height: field.height,
+                      position: 'absolute',
+                      cursor: draggingId === field.id ? 'grabbing' : 'grab',
+                      zIndex: 10,
+                    }}
+                    className={`
+                      flex items-center justify-between rounded border border-blue-500 bg-blue-50/80 px-2 text-xs font-medium text-blue-700 shadow-sm transition-colors
+                      ${draggingId === field.id ? 'ring-2 ring-blue-500 ring-offset-2' : 'hover:bg-blue-100'}
+                    `}
+                  >
+                    <span className="truncate pointer-events-none">{field.label}</span>
+                    <GripVertical className="h-3 w-3 opacity-50 pointer-events-none" />
+                  </div>
+                ))}
+             </div>
+          </div>
+        </div>
       </div>
 
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle className="text-base">Signature fields</CardTitle>
-          <Button type="button" variant="outline" size="sm" onClick={handleAddSignatureField} disabled={isPending}>
-            + Add field
-          </Button>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {signatureFields.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No signature fields added yet.</p>
-          ) : (
-            signatureFields.map((field, index) => (
-              <div key={field.id} className="flex items-center justify-between rounded-md border p-3 text-sm">
-                <div>
-                  <p className="font-medium">{field.label}</p>
-                  <p className="text-xs text-muted-foreground">
-                    Position: ({field.x}, {field.y}) – Size: {field.width}×{field.height}
-                  </p>
-                </div>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() =>
-                    setSignatureFields((prev) => prev.filter((_, currentIndex) => currentIndex !== index))
-                  }
-                >
-                  Remove
-                </Button>
-              </div>
-            ))
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Live preview</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2">
-          <div
-            className="min-h-[200px] rounded-md border bg-white p-4 text-sm"
-            dangerouslySetInnerHTML={{
-              __html: previewHtml || "<p class='text-muted-foreground'>Start typing to preview…</p>",
-            }}
-          />
-          <p className="text-xs text-muted-foreground">
-            Preview uses sample data (e.g., Jane Doe, Smith v. State). Actual case values will replace the
-            placeholders when you generate documents.
-          </p>
-        </CardContent>
-      </Card>
-
-      <Button type="submit" disabled={isPending}>
-        {isPending ? "Creating…" : "Create template"}
-      </Button>
-      <Button
-        type="button"
-        variant="outline"
-        disabled={isPdfPreviewPending || !htmlContent.trim()}
-        onClick={handlePreviewPdfClick}
-      >
-        {isPdfPreviewPending ? "Rendering preview…" : "Generate sample PDF"}
-      </Button>
+      <div className="flex gap-4 pt-4">
+        <Button type="submit" disabled={isPending}>
+          {isPending ? "Saving..." : "Create Template"}
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={isPdfPreviewPending || !htmlContent.trim()}
+          onClick={handlePreviewPdfClick}
+        >
+          {isPdfPreviewPending ? "Generating..." : "Download Sample PDF"}
+        </Button>
+      </div>
     </form>
   )
 }
